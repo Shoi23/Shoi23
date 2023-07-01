@@ -17,11 +17,10 @@ def create_new_conv(input, chs):
     x = BatchNormalization()(x)
     return Activation("relu")(x)
 
-# Squeeze and Excitation
 def se_block(input, channels, r=8):
-    # Squeeze
+
     x = GlobalAveragePooling2D()(input)
-    # Excitation
+
     x = Dense(channels//r, activation="relu")(x)
     x = Dense(channels, activation="sigmoid")(x)
     return Multiply()([input, x])
@@ -69,7 +68,6 @@ def create_transfer_vgg(use_batch_norm, use_se_block):
 
 def create_transfer_mobilenet(use_se_block):
     mobile = MobileNet(input_shape=(128,128,3), include_top=False, weights="imagenet")
-    # Squeeze and Excitationを入れるレイヤー
     se_layers = ["conv1"]
     se_layers += ["conv_pw_"+str(x) for x in range(1,14)] # DepthwiseConv2Dには入れない
     x = mobile.layers[0].input
@@ -98,28 +96,16 @@ def train(case_no):
     print("case ", case_no, "starts")
     (X_train, y_train), (X_test, y_test) = cifar10.load_data()
 
-    # ネットワーク
-    if case_no == 0: model = create_new_network(False)
-    elif case_no == 1: model = create_new_network(True)
-    elif case_no == 2: model = create_transfer_vgg(False, False)
-    elif case_no == 3: model = create_transfer_vgg(True, False)
-    elif case_no == 4: model = create_transfer_vgg(True, True)
-    elif case_no == 5: model = create_transfer_mobilenet(False)
-    elif case_no == 6: model = create_transfer_mobilenet(True)
+    if case_no <= 1: upsampling_ratio = 1
+    elif case_no <= 4: upsampling_ratio = 2 
+    else: upsampling_ratio = 4 
 
-    # アップサンプリング倍率
-    if case_no <= 1: upsampling_ratio = 1 # 新規
-    elif case_no <= 4: upsampling_ratio = 2 # VGG
-    else: upsampling_ratio = 4 # MobileNet
-
-    # ジェネレーター
     batch_size = 1024
     train_gen = generator(X_train, y_train, batch_size, upsampling_ratio)
     test_gen = generator(X_test, y_test, batch_size, upsampling_ratio)
 
-    # オプティマイザー
-    if case_no <= 1: optimizer = tf.train.AdamOptimizer() # 新規学習
-    else: optimizer = tf.train.RMSPropOptimizer(1e-5) # 転移学習
+    if case_no <= 1: optimizer = tf.train.AdamOptimizer() 
+    else: optimizer = tf.train.RMSPropOptimizer(1e-5) 
 
     model.summary()
     model.compile(optimizer, "categorical_crossentropy", ["acc"])
