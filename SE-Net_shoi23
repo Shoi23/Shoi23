@@ -1,0 +1,152 @@
+import tensorflow as tf
+from tensorflow.keras.layers import Conv2D, BatchNormalization, Activation, AveragePooling2D, GlobalAveragePooling2D, Dense, Multiply, Input
+from tensorflow.keras.models import Model
+from tensorflow.keras.applications import VGG16, MobileNet
+import tensorflow.keras.backend as K
+from tensorflow.keras.callbacks import History
+from tensorflow.contrib.tpu.python.tpu import keras_support
+
+from keras.activations import linear
+from keras.datasets import cifar10
+from keras.utils import to_categorical
+import numpy as np
+import os, pickle, zipfile, glob
+
+def create_new_conv(input, chs):
+    x = Conv2D(chs, 3, padding="same")(input)
+    x = BatchNormalization()(x)
+    return Activation("relu")(x)
+
+# Squeeze and Excitation
+def se_block(input, channels, r=8):
+    # Squeeze
+    x = GlobalAveragePooling2D()(input)
+    # Excitation
+    x = Dense(channels//r, activation="relu")(x)
+    x = Dense(channels, activation="sigmoid")(x)
+    return Multiply()([input, x])
+
+def create_new_network(use_se_block):
+    input = Input((32,32,3))
+    x = input
+    for i in range(3):
+        x = create_new_conv(x, 64)
+        if use_se_block: x = se_block(x, 64)
+    x = AveragePooling2D(2)(x)
+    for i in range(3):
+        x = create_new_conv(x, 128)
+        if use_se_block: x = se_block(x, 128)
+    x = AveragePooling2D(2)(x)
+    for i in range(3):
+        x = create_new_conv(x, 256)
+        if use_se_block: x = se_block(x, 256)
+    x = GlobalAveragePooling2D()(x)
+    x = Dense(10, activation="softmax")(x)
+
+    return Model(input, x)
+
+def create_transfer_vgg(use_batch_norm, use_se_block):
+    vgg = VGG16(input_shape=(64,64,3), include_top=False, weights="imagenet")
+    x = vgg.layers[0].input
+    for i, layer in enumerate(vgg.layers):
+        if i == 0: continue
+        if "conv" in layer.name:
+            if use_batch_norm:
+                layer.activation = linear
+                x = layer(x)
+                x = BatchNormalization()(x)
+                x = Activation("relu")(x)
+            else:
+                x = layer(x)
+            if use_se_block:
+                x = se_block(x, layer.filters)
+        else:
+            x = layer(x)
+    x = GlobalAveragePooling2D()(x)
+    x = Dense(10, activation="softmax")(x)
+
+    return Model(vgg.inputs, x)
+
+def create_transfer_mobilenet(use_se_block):
+    mobile = MobileNet(input_shape=(128,128,3), include_top=False, weights="imagenet")
+    # Squeeze and Excitationを入れるレイヤー
+    se_layers = ["conv1"]
+    se_layers += ["conv_pw_"+str(x) for x in range(1,14)] # DepthwiseConv2Dには入れない
+    x = mobile.layers[0].input
+    for i, layer in enumerate(mobile.layers):
+        if i == 0: continue
+        x = layer(x)
+        if layer.name in se_layers and use_se_block:
+            x = se_block(x, layer.filters)
+    x = GlobalAveragePooling2D()(x)
+    x = Dense(10, activation="softmax")(x)
+
+    return Model(mobile.inputs, x)
+
+def generator(X, y, batch_size, upsampling_ratio):
+    while True:
+        indices = np.arange(X.shape[0])
+        np.random.shuffle(indices)
+        for i in range(X.shape[0]//batch_size):
+            current_batch = indices[i*batch_size:(i+1)*batch_size]
+            X_batch = X[current_batch].repeat(upsampling_ratio, axis=1).repeat(upsampling_ratio, axis=2)
+            X_batch = X_batch / 255.0
+            y_batch = to_categorical(y[current_batch], 10)
+            yield X_batch, y_batch
+
+def train(case_no):
+    print("case ", case_no, "starts")
+    (X_train, y_train), (X_test, y_test) = cifar10.load_data()
+
+    # ネットワーク
+    if case_no == 0: model = create_new_network(False)
+    elif case_no == 1: model = create_new_network(True)
+    elif case_no == 2: model = create_transfer_vgg(False, False)
+    elif case_no == 3: model = create_transfer_vgg(True, False)
+    elif case_no == 4: model = create_transfer_vgg(True, True)
+    elif case_no == 5: model = create_transfer_mobilenet(False)
+    elif case_no == 6: model = create_transfer_mobilenet(True)
+
+    # アップサンプリング倍率
+    if case_no <= 1: upsampling_ratio = 1 # 新規
+    elif case_no <= 4: upsampling_ratio = 2 # VGG
+    else: upsampling_ratio = 4 # MobileNet
+
+    # ジェネレーター
+    batch_size = 1024
+    train_gen = generator(X_train, y_train, batch_size, upsampling_ratio)
+    test_gen = generator(X_test, y_test, batch_size, upsampling_ratio)
+
+    # オプティマイザー
+    if case_no <= 1: optimizer = tf.train.AdamOptimizer() # 新規学習
+    else: optimizer = tf.train.RMSPropOptimizer(1e-5) # 転移学習
+
+    model.summary()
+    model.compile(optimizer, "categorical_crossentropy", ["acc"])
+
+    tpu_grpc_url = "grpc://"+os.environ["COLAB_TPU_ADDR"]
+    tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(tpu_grpc_url)
+    strategy = keras_support.TPUDistributionStrategy(tpu_cluster_resolver)
+    model = tf.contrib.tpu.keras_to_tpu_model(model, strategy=strategy)
+
+    hist = History()
+    model.fit_generator(train_gen, X_train.shape[0]//batch_size,
+                        validation_data=test_gen, validation_steps=X_test.shape[0]//batch_size,
+                        callbacks=[hist], epochs=100)
+    history = hist.history
+
+    if not os.path.exists("result"):
+        os.mkdir("result")
+    with open(f"result/case_{case_no}.dat", "wb") as fp:
+        pickle.dump(history, fp)
+
+def main():
+    for i in range(7):
+        K.clear_session()
+        train(i)
+    with zipfile.ZipFile("senet_history.zip", "w") as zip:
+        for f in glob.glob("result/*.dat"):
+            zip.write(f)
+
+if __name__ == "__main__":
+    main()
