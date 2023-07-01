@@ -1,0 +1,161 @@
+#import文
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.layers import Input, Dense, Dropout, Conv2D, BatchNormalization, MaxPooling2D, UpSampling2D, LeakyReLU, concatenate
+from tensorflow.keras.models import Model, model_from_json
+from tensorflow.keras import backend as K
+from tensorflow.keras import regularizers
+from tensorflow.keras.utils import plot_model
+from tensorflow.keras.callbacks import TensorBoard, EarlyStopping 
+import pydotplus as pdp
+
+'''
+モデルの定義
+'''
+#import文
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import tensorflow as tf
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.layers import Input, Dense, Dropout, Conv2D, BatchNormalization, MaxPooling2D, UpSampling2D, LeakyReLU, concatenate, GlobalAveragePooling2D, Multiply, Add, DepthwiseConv2D
+from tensorflow.keras.models import Model, model_from_json
+from tensorflow.keras import backend as K
+from tensorflow.keras import regularizers
+from tensorflow.keras.utils import plot_model
+from tensorflow.keras.callbacks import TensorBoard, EarlyStopping 
+import pydotplus as pdp
+
+
+'''
+モデルの定義
+'''
+
+#def文で繰り返す部分は先に記述
+
+input_img = Input(shape=(64, 64, 3))
+
+def se_block(in_block, ch, activation_func, ratio=4):
+  z = GlobalAveragePooling2D()(in_block)
+  x = Dense(ch//ratio, activation='relu')(z)
+  x = Dense(ch, activation='sigmoid')(x)
+  return Multiply()([in_block, x])
+
+
+def MBconv_block(inputimg_r1, activation_func, layer1, kernel_1, expantion_factor, strides):
+ conv = Conv2D( layer1*expantion_factor, (1, 1), activation=activation_func, padding='same')(inputimg_r1)
+ bn = BatchNormalization()(conv)
+ conv = DepthwiseConv2D((kernel_1, kernel_1), depth_multiplier=1, activation='relu', padding='same')(bn)
+ bn = BatchNormalization()(conv)
+ seblock1 = se_block(bn, layer1*expantion_factor, activation_func)
+ conv = Conv2D( layer1, (1, 1), activation=activation_func, padding='same')(seblock1)
+ bn = BatchNormalization()(conv)
+ if (strides == 1):
+   add = Add()([bn, inputimg_r1])
+ else:
+   add = bn
+ return add
+
+def FMBconv_block(inputimg_r1, activation_func, layer1, kernel_1, expantion_factor, strides): 
+ conv = Conv2D( layer1*expantion_factor, (3, 3), activation=activation_func, padding='same')(inputimg_r1)
+ bn = BatchNormalization()(conv)
+ seblock1 = se_block(bn, layer1*expantion_factor, activation_func)
+ conv = Conv2D( layer1, (1, 1), activation=activation_func, padding='same')(seblock1)
+ bn = BatchNormalization()(conv)
+ if (strides == 1):
+   add = Add()([bn, inputimg_r1])
+ else:
+   add = bn
+ return add
+
+
+def encode(inputimg_r1, activation_func): 
+ conv1 = Conv2D( 12, (3, 3), activation=activation_func, padding='same', strides=(2, 2))(inputimg_r1)
+ bn1 = BatchNormalization()(conv1)
+ FMBconv_block1 = FMBconv_block(bn1, 'relu', 12, 3, 1, 1)
+ FMBconv_block2 = FMBconv_block(FMBconv_block1, 'relu', 12, 3, 1, 1)
+ conv2 = Conv2D( 24, (1, 1), padding='same', strides=(2, 2))(FMBconv_block2)
+ FMBconv_block3 = FMBconv_block(conv2, 'relu', 24, 3, 4, 2)
+ FMBconv_block4 = FMBconv_block(FMBconv_block3, 'relu', 24, 3, 4, 2)
+ FMBconv_block5 = FMBconv_block(FMBconv_block4, 'relu', 24, 3, 4, 2)
+ conv3 = Conv2D( 32, (1, 1),  padding='same', strides=(2, 2))(FMBconv_block5)
+ FMBconv_block7 = FMBconv_block(conv3, 'relu', 32, 3, 4, 2)
+ FMBconv_block8 = FMBconv_block(FMBconv_block7, 'relu', 32, 3, 4, 2)
+ FMBconv_block9 = FMBconv_block(FMBconv_block8, 'relu', 32, 3, 4, 2)
+ conv4 = Conv2D( 64, (1, 1), padding='same', strides=(2, 2))(FMBconv_block9)
+ MBconv_block11 = MBconv_block(conv4, 'relu', 64, 3, 4, 2)
+ MBconv_block12 = MBconv_block(MBconv_block11, 'relu', 64, 3, 4, 2)
+ MBconv_block13 = MBconv_block(MBconv_block12, 'relu', 64, 3, 4, 2)
+ conv5 = Conv2D( 80, (1, 1), padding='same', strides=(2, 2))(MBconv_block13)
+ MBconv_block17 = MBconv_block(conv5, 'relu', 80, 3, 4, 1)
+ MBconv_block18 = MBconv_block(MBconv_block17, 'relu', 80, 3, 6, 1)
+ MBconv_block19 = MBconv_block(MBconv_block18, 'relu', 80, 3, 6, 1)
+ MBconv_block20 = MBconv_block(MBconv_block19, 'relu', 80, 3, 6, 1)
+ MBconv_block21 = MBconv_block(MBconv_block20, 'relu', 80, 3, 6, 1)
+ conv6 = Conv2D( 128, (1, 1), padding='same', strides=(2, 2))(MBconv_block21)
+ MBconv_block26 = MBconv_block(conv6, 'relu', 128, 3, 6, 2)
+ MBconv_block27 = MBconv_block(MBconv_block26, 'relu', 128, 3, 6, 2)
+ MBconv_block28 = MBconv_block(MBconv_block27, 'relu', 128, 3, 6, 2)
+ MBconv_block29 = MBconv_block(MBconv_block28, 'relu', 128, 3, 6, 2)
+ MBconv_block30 = MBconv_block(MBconv_block29, 'relu', 128, 3, 6, 2)
+ MBconv_block31 = MBconv_block(MBconv_block30, 'relu', 128, 3, 6, 2)
+ MBconv_block32 = MBconv_block(MBconv_block31, 'relu', 128, 3, 6, 2)
+ MBconv_block33 = MBconv_block(MBconv_block32, 'relu', 128, 3, 6, 2)
+ 
+ return MBconv_block33
+
+def decode(inputimg_r2):
+ MBconv_block41 = MBconv_block(inputimg_r2, 'relu', 128, 3, 6, 2)
+ MBconv_block42 = MBconv_block(MBconv_block41, 'relu', 128, 3, 6, 2)
+ MBconv_block43 = MBconv_block(MBconv_block42, 'relu', 128, 3, 6, 2)
+ MBconv_block44 = MBconv_block(MBconv_block43, 'relu', 128, 3, 6, 2)
+ MBconv_block45 = MBconv_block(MBconv_block44, 'relu', 128, 3, 6, 2)
+ MBconv_block46 = MBconv_block(MBconv_block45, 'relu', 128, 3, 6, 2)
+ MBconv_block47 = MBconv_block(MBconv_block46, 'relu', 128, 3, 6, 2)
+ MBconv_block48 = MBconv_block(MBconv_block47, 'relu', 128, 3, 6, 2)
+ up1   = UpSampling2D((2, 2))(MBconv_block48)
+ conv7 = Conv2D( 80, (1, 1))(up1)
+ MBconv_block56 = MBconv_block(conv7, 'relu', 80, 3, 4, 1)
+ MBconv_block57 = MBconv_block(MBconv_block56, 'relu', 80, 3, 6, 1)
+ MBconv_block58 = MBconv_block(MBconv_block57, 'relu', 80, 3, 6, 1)
+ MBconv_block59 = MBconv_block(MBconv_block58, 'relu', 80, 3, 6, 1)
+ MBconv_block60 = MBconv_block(MBconv_block59, 'relu', 80, 3, 6, 1)
+ up2   = UpSampling2D((2, 2))(MBconv_block60)
+ conv8 = Conv2D( 64, (1, 1))(up2)
+ MBconv_block65 = MBconv_block(conv8, 'relu', 64, 3, 4, 2)
+ MBconv_block66 = MBconv_block(MBconv_block65, 'relu', 64, 3, 4, 2)
+ MBconv_block67 = MBconv_block(MBconv_block66, 'relu', 64, 3, 4, 2)
+ up3   = UpSampling2D((2, 2))(MBconv_block67)
+ conv9 = Conv2D( 32, (1, 1))(up3)
+ FMBconv_block71 = FMBconv_block(conv9, 'relu', 32, 3, 4, 2)
+ FMBconv_block72 = FMBconv_block(FMBconv_block71, 'relu', 32, 3, 4, 2)
+ FMBconv_block73 = FMBconv_block(FMBconv_block72, 'relu', 32, 3, 4, 2)
+ up4   = UpSampling2D((2, 2))(FMBconv_block73)
+ conv10 = Conv2D( 24, (1, 1))(up4)
+ FMBconv_block75 = FMBconv_block(conv10, 'relu', 24, 3, 4, 2)
+ FMBconv_block76 = FMBconv_block(FMBconv_block75, 'relu', 24, 3, 4, 2)
+ FMBconv_block77 = FMBconv_block(FMBconv_block76, 'relu', 32, 3, 4, 2)
+ up5   = UpSampling2D((2, 2))(FMBconv_block77)
+ conv11 = Conv2D( 12, (1, 1))(up5)
+ FMBconv_block79 = FMBconv_block(conv11, 'relu', 12, 3, 1, 1)
+ FMBconv_block80 = FMBconv_block(FMBconv_block79, 'relu', 12, 3, 1, 1)
+ up6   = UpSampling2D((2, 2))(FMBconv_block80)
+ bn2 = BatchNormalization()(up6)
+ return bn2
+
+#入力層
+input_img = Input(shape=(64, 64, 3))
+#Encoder
+encoder0 = encode(input_img, LeakyReLU()) 
+#Decoder
+decoder0 = decode(encoder0)
+#出力層
+output_img = Conv2D(4, (3, 3),  padding='same')(decoder0)
+
+
+#モデルの定義
+EfficientnetV2_model = Model(input_img, output_img)
